@@ -5824,7 +5824,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
         },
       });
-      const threadId = ThreadId.makeUnsafe("preview-scope-thread");
+      const threadId = ThreadId.make("preview-scope-thread");
       const host = {
         clientId: "preview-scope-host",
         environmentId: testEnvironmentDescriptor.environmentId,
