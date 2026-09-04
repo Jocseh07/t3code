@@ -5,6 +5,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
   type ContextMenuItem,
   type EnvironmentId,
@@ -35,7 +36,7 @@ import { shouldLoadNextBranchPageAfterScroll } from "../state/paginatedBranches"
 import { usePaginatedBranches } from "../state/queries";
 import { useProject, useThread } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
-import { useEnvironmentScope } from "~/state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { vcsEnvironment } from "../state/vcs";
@@ -105,6 +106,7 @@ export function BranchToolbarBranchSelector({
   onComposerFocusRequest,
 }: BranchToolbarBranchSelectorProps) {
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
+  const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const startFromOriginSwitchId = useId();
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession, "thread session stop");
   const updateThreadMetadata = useAtomCommand(
@@ -147,6 +149,8 @@ export function BranchToolbarBranchSelector({
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const branchCwd = activeWorktreePath ?? activeProjectCwd;
   const hasServerThread = serverThread !== null;
+  const canUpdateThreadBranch = !hasServerThread || canOperateThread;
+  const canChangeThreadBranch = canWriteSourceControl && canUpdateThreadBranch;
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
     resolveEffectiveEnvMode({
@@ -160,7 +164,12 @@ export function BranchToolbarBranchSelector({
   // ---------------------------------------------------------------------------
   const setThreadBranch = useCallback(
     (branch: string | null, worktreePath: string | null, automatic = false) => {
-      if (!activeThreadId || !activeProject) return;
+      if (
+        !activeThreadId ||
+        !activeProject ||
+        (hasServerThread && !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
+      )
+        return;
       if (serverSession && worktreePath !== activeWorktreePath) {
         void stopThreadSession({
           environmentId,
@@ -271,11 +280,11 @@ export function BranchToolbarBranchSelector({
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
-    canWriteSourceControl && prReference && onCheckoutPullRequestRequest
+    canChangeThreadBranch && prReference && onCheckoutPullRequestRequest
       ? `__checkout_pull_request__:${prReference}`
       : null;
   const canCreateBranch =
-    canWriteSourceControl && !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
+    canChangeThreadBranch && !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
   // The ref is created under its sanitized name, so the collision check has to
   // use that name too. Matching on the raw query would offer to create a ref
   // that already exists whenever sanitizing changes the name.
@@ -393,7 +402,11 @@ export function BranchToolbarBranchSelector({
   );
 
   const runBranchAction = (action: () => Promise<void>) => {
-    if (!canWriteSourceControl) return;
+    if (
+      !readEnvironmentScope(environmentId, AuthSourceControlWriteScope) ||
+      (hasServerThread && !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
+    )
+      return;
     startBranchActionTransition(async () => {
       await action();
       branchRefState.refresh();
@@ -402,7 +415,7 @@ export function BranchToolbarBranchSelector({
   };
 
   const selectBranch = (refName: VcsRef) => {
-    if (!branchCwd || !activeProjectCwd || isBranchActionPending) return;
+    if (!canUpdateThreadBranch || !branchCwd || !activeProjectCwd || isBranchActionPending) return;
 
     if (isSelectingWorktreeBase) {
       setThreadBranch(refName.name, null);
@@ -463,7 +476,7 @@ export function BranchToolbarBranchSelector({
   };
 
   const createRef = (rawName: string) => {
-    if (!canWriteSourceControl) return;
+    if (!canChangeThreadBranch) return;
     const name = sanitizeNewRefName(rawName);
     if (!branchCwd || !name || isBranchActionPending) return;
 
@@ -710,14 +723,15 @@ export function BranchToolbarBranchSelector({
         value={itemValue}
         className="pe-1.5"
         disabled={
-          !canWriteSourceControl &&
-          !isSelectingWorktreeBase &&
-          (!activeProjectCwd ||
-            !resolveBranchSelectionTarget({
-              activeProjectCwd,
-              activeWorktreePath,
-              refName,
-            }).reuseExistingWorktree)
+          !canUpdateThreadBranch ||
+          (!canWriteSourceControl &&
+            !isSelectingWorktreeBase &&
+            (!activeProjectCwd ||
+              !resolveBranchSelectionTarget({
+                activeProjectCwd,
+                activeWorktreePath,
+                refName,
+              }).reuseExistingWorktree))
         }
         onClick={() => selectBranch(refName)}
         onContextMenu={(event) => handleBranchContextMenu(event, itemValue)}
