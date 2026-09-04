@@ -13,6 +13,8 @@ import {
   selectProjectGroupingSettings,
 } from "../../logicalProject";
 import {
+  AuthSettingsWriteScope,
+  EnvironmentAuthorizationError,
   type EnvironmentId,
   type ModelSelection,
   type ProjectIconOverride,
@@ -75,6 +77,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environmen
 import { useProjects, useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import { readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
@@ -281,6 +284,20 @@ export function useProjectScriptSettings(
       const message = "No available machine, or another action change is saving.";
       toastManager.add({ type: "error", title: "Actions not saved", description: message });
       return AsyncResult.failure(Cause.fail(new Error(message)));
+    }
+    // Scripts and their shortcuts are environment settings. Check every
+    // target before the first write so a partial save cannot happen.
+    const denied = targets.find(
+      ({ environmentId }) => !readEnvironmentScope(environmentId, AuthSettingsWriteScope),
+    );
+    if (denied) {
+      const message = "This connection cannot change environment settings.";
+      toastManager.add({ type: "error", title: "Actions not saved", description: message });
+      return AsyncResult.failure(
+        Cause.fail(
+          new EnvironmentAuthorizationError({ message, requiredScope: AuthSettingsWriteScope }),
+        ),
+      );
     }
     savingRef.current = true;
     setSaving(true);
@@ -1406,6 +1423,7 @@ function ProjectDetail({
       </SettingsPageContainer>
 
       <ProjectScriptEditorDialog
+        environmentId={selectedCheckout.environmentId}
         request={editorRequest}
         scripts={scripts}
         onSubmit={submitScript}
