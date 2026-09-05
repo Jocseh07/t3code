@@ -13,7 +13,12 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { CommandId, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  CommandId,
+  ProviderDriverKind,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import {
   ArrowRightIcon,
@@ -58,6 +63,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../../state/environments
 import { useEnvironmentQuery } from "../../state/query";
 import { projectEnvironment } from "../../state/projects";
 import { serverEnvironment } from "../../state/server";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { terminalEnvironment } from "../../state/terminal";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { connectPairing } from "../../connection/onboarding";
@@ -113,6 +119,7 @@ function useOnboardingTargetEnvironment(
 const AGENT_ONBOARDING_THREAD_ID = ThreadId.make("onboarding-agent-setup");
 const ONBOARDING_STAGES = ["Connect", "Agents", "Projects"] as const;
 const SCAN_LIMIT_MESSAGE = "Scan limit reached. Some projects or conversations may be missing.";
+const IMPORT_PERMISSION_MESSAGE = "This connection cannot import projects or thread history.";
 
 export function WelcomeWizard({
   localAvailable,
@@ -1028,6 +1035,7 @@ function ImportStep({
   const targetEnvironment = useOnboardingTargetEnvironment(mode, pairedEnvironmentId);
   const environmentId = targetEnvironment?.environmentId ?? null;
   const machineLabel = targetEnvironment?.label ?? "this machine";
+  const canImport = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const scan = useEnvironmentQuery(
     environmentId === null ? null : agentSessionScan({ environmentId, input: {} }),
   );
@@ -1038,6 +1046,11 @@ function ImportStep({
   const [deselected, setDeselected] = useState<ReadonlySet<string>>(new Set());
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState("");
+  const visibleImportError = !canImport
+    ? IMPORT_PERMISSION_MESSAGE
+    : importError === IMPORT_PERMISSION_MESSAGE
+      ? ""
+      : importError;
   const [landingProject, setLandingProject] = useState<ScopedProjectRef | null>(null);
   // Keep project creation attempts separate from completed history imports so both can retry.
   const importedProjectsRef = useRef(new Map<string, ScopedProjectRef>());
@@ -1108,11 +1121,24 @@ function ImportStep({
     setLandingProject(projectRef);
   };
 
+  const checkImportPermission = () => {
+    if (
+      environmentId !== null &&
+      readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+    ) {
+      return true;
+    }
+    setIsImporting(false);
+    setImportError(IMPORT_PERMISSION_MESSAGE);
+    return false;
+  };
+
   const runImport = async (selection: ReadonlyArray<AgentSessionProjectCandidate>) => {
     if (environmentId === null || selection.length === 0) {
       void onDone();
       return;
     }
+    if (!checkImportPermission()) return;
     setIsImporting(true);
     setImportError("");
     lastImportSelectionRef.current = selection.map((candidate) => candidate.path);
@@ -1151,6 +1177,7 @@ function ImportStep({
           projectAttempts.set(candidate.path, attempt);
         }
         projectId = attempt.projectId;
+        if (!checkImportPermission()) return;
         const result = await createProject({
           environmentId,
           input: {
@@ -1177,6 +1204,7 @@ function ImportStep({
         }
       }
 
+      if (!checkImportPermission()) return;
       const threadImportResult = await importThreads({
         environmentId,
         input: { projectId, expectedWorkspaceRoot: candidate.path },
@@ -1317,7 +1345,9 @@ function ImportStep({
             </label>
           ))}
         </div>
-        {importError ? <p className="mt-3 text-sm text-destructive">{importError}</p> : null}
+        {visibleImportError ? (
+          <p className="mt-3 text-sm text-destructive">{visibleImportError}</p>
+        ) : null}
         <div className="mt-7 flex flex-wrap items-center justify-between gap-3">
           <Button
             variant="ghost-muted"
@@ -1327,7 +1357,7 @@ function ImportStep({
             {importError ? "Continue without the rest" : "Skip"}
           </Button>
           <Button
-            disabled={isImporting || selected.length === 0}
+            disabled={!canImport || isImporting || selected.length === 0}
             onClick={() => void runImport(selected)}
           >
             {isImporting ? "Importing..." : `Import ${selected.length}`}
@@ -1366,7 +1396,9 @@ function ImportStep({
           </p>
         ) : null}
       </div>
-      {importError ? <p className="mt-3 text-sm text-destructive">{importError}</p> : null}
+      {visibleImportError ? (
+        <p className="mt-3 text-sm text-destructive">{visibleImportError}</p>
+      ) : null}
       <div className="mt-7 flex flex-wrap items-center justify-between gap-3">
         <Button
           variant="ghost-muted"
@@ -1380,7 +1412,7 @@ function ImportStep({
             Choose
           </Button>
           <Button
-            disabled={isImporting || recent.length === 0}
+            disabled={!canImport || isImporting || recent.length === 0}
             onClick={() => void runImport(recent)}
           >
             {isImporting
