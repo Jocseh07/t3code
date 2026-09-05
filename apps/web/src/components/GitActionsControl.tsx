@@ -1063,7 +1063,10 @@ export default function GitActionsControl({
       }
 
       if (activeServerThread) {
-        if (!canOperateThread || activeServerThread.branch === branch) {
+        if (
+          !readEnvironmentScope(activeThreadRef.environmentId, AuthOrchestrationOperateScope) ||
+          activeServerThread.branch === branch
+        ) {
           return;
         }
 
@@ -1092,7 +1095,6 @@ export default function GitActionsControl({
       });
     },
     [
-      canOperateThread,
       activeDraftThread,
       activeServerThread,
       activeThreadRef,
