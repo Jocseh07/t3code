@@ -81,6 +81,7 @@ import { projectEnvironment } from "../../state/projects";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { environmentSession, readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { useComposerMenuState } from "../chat/useComposerMenuState";
@@ -446,7 +447,9 @@ function ProjectDetail({
   const updateClientSettings = useUpdateClientSettings();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const threads = useThreadShells();
-  const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
+  const updateProject = useOrchestrationCommand(projectEnvironment.update, {
+    reportFailure: false,
+  });
   const updateServerSettings = useAtomCommand(serverEnvironment.updateSettings, "project setting");
   const [savingBrowserAccess, setSavingBrowserAccess] = useState(false);
   const savingBrowserAccessRef = useRef(false);
@@ -517,7 +520,9 @@ function ProjectDetail({
   };
   const setBrowserAccess = (enabled: boolean | undefined) =>
     setBooleanOverride("projectAgentBrowserAccessOverrides", enabled);
-  const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
+  const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
+    reportFailure: false,
+  });
   const projectNameEditedRef = useRef(false);
 
   const faviconPath = representative.faviconPath ?? null;
