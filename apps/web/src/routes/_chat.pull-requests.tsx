@@ -1,7 +1,6 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { pullRequestHostOf, resolveEnvironmentMachineKind, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
