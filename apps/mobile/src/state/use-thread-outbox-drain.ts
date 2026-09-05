@@ -805,6 +805,7 @@ export function useThreadOutboxDrain(): void {
           createdAt: queuedMessage.createdAt,
         },
       });
+      if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;
       const failure = reportFailure(deliveryResult, "start-turn");
       if (failure?.action === "retry") {
         return false;
@@ -935,6 +936,7 @@ export function useThreadOutboxDrain(): void {
         }),
       });
       const { reportFailure } = makeDeliveryHelpers(queuedMessage);
+      if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;
       const failure = reportFailure(deliveryResult, "start-turn");
       if (failure?.action === "retry") {
         return false;
