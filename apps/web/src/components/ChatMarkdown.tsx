@@ -1,3 +1,4 @@
+import { pullRequestRefForLink } from "~/lib/openPullRequestLink";
 import { useAtomValue } from "@effect/atom-react";
 import {
   CheckIcon,
@@ -2755,19 +2756,18 @@ const CHAT_MARKDOWN_COMPONENTS = {
               pullRequestCandidate,
             )
           : undefined;
-      const pullRequestPreviewTarget =
-        environmentId === null || pullRequestProject === undefined || pullRequestCandidate === null
+      const pullRequestReference =
+        pullRequestCandidate === null
           ? null
-          : {
-              environmentId,
-              input: {
-                projectId: pullRequestProject.id,
-                repository:
-                  pullRequestProject.repositoryIdentity?.displayName ??
-                  pullRequestCandidate.repository,
-                number: pullRequestCandidate.number,
-              },
-            };
+          : pullRequestRefForLink(
+              pullRequestProject,
+              pullRequestCandidate,
+              serverConfig?.environment.capabilities.unlinkedGitHubPullRequests === true,
+            );
+      const pullRequestPreviewTarget =
+        environmentId === null || pullRequestReference === null
+          ? null
+          : { environmentId, input: pullRequestReference };
       const isSameDocumentLink = href?.startsWith("#") ?? false;
       const onClick = props.onClick;
       const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
@@ -2851,6 +2851,23 @@ const CHAT_MARKDOWN_COMPONENTS = {
             void showExternalLinkContextMenu({
               href,
               canOpenInPreview,
+              ...(pullRequestPreviewTarget === null
+                ? {}
+                : {
+                    openInPullRequestPanel: (target: string) => {
+                      openChangeRequestLink(
+                        {
+                          metaKey: false,
+                          ctrlKey: false,
+                          preventDefault: () => undefined,
+                          stopPropagation: () => undefined,
+                        },
+                        target,
+                        undefined,
+                        environmentId ?? undefined,
+                      );
+                    },
+                  }),
               threadLinkAction,
               position: { x: event.clientX, y: event.clientY },
               showContextMenu: (items, position) => api.contextMenu.show(items, position),

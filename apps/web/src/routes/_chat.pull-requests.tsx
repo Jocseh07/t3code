@@ -1,5 +1,6 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
+import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { pullRequestHostOf, resolveEnvironmentMachineKind, ThreadId } from "@t3tools/contracts";
 import type {
@@ -207,13 +208,6 @@ const MAX_PAGE_SIZE = 500;
 const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
 /** The list owns one environment-scoped right panel rather than borrowing a real thread's. */
 const PULL_REQUESTS_PANEL_ID = ThreadId.make("pull-requests-panel");
-/**
- * A fixed sentinel, not a real server: the panel is one workspace-level surface list (each
- * surface already carries the server it was read from), so its store key must not move when a
- * capable server disconnects or reconnects. Real environment ids are server-generated UUIDs, so
- * this string can never collide with one.
- */
-const PULL_REQUESTS_PANEL_ENVIRONMENT_ID = "pull-requests-panel" as EnvironmentId;
 /** Stable so a read that is not wanted right now does not re-key on every render. */
 const NO_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> = [];
 const EMPTY_PREVIEW_SESSIONS = {};
@@ -425,10 +419,7 @@ function PullRequestsRouteView() {
   // uses a fixed sentinel environment, not whichever server happens to sort first, so the tab
   // strip survives a capable server disconnecting or losing the pull-requests capability.
   const rightPanelRef = useMemo(
-    () =>
-      capableEnvironments.length === 0
-        ? null
-        : scopeThreadRef(PULL_REQUESTS_PANEL_ENVIRONMENT_ID, PULL_REQUESTS_PANEL_ID),
+    () => (capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF),
     [capableEnvironments.length],
   );
   const rightPanelState = useRightPanelStore((state) =>
@@ -1439,7 +1430,7 @@ function PullRequestsRouteView() {
           environmentId: activePullRequestSurface.environmentId,
           repository: activePullRequestSurface.repository,
           number: activePullRequestSurface.number,
-          projectId: activePullRequestSurface.projectId as ProjectId,
+          projectId: activePullRequestSurface.projectId as ProjectId | null,
         }
       : null;
 
@@ -1450,7 +1441,7 @@ function PullRequestsRouteView() {
         : {
             repository: surface.repository,
             number: surface.number,
-            selectedProjectId: surface.projectId as ProjectId,
+            selectedProjectId: (surface.projectId ?? undefined) as ProjectId | undefined,
             ...(surface.environmentId === undefined
               ? {}
               : { selectedEnvironmentId: surface.environmentId as EnvironmentId }),

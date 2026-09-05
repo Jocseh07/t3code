@@ -6,6 +6,7 @@ import {
   gitHubPullRequestBrowserUrl,
   matchesLinkedPullRequestUrl,
   parseChangeRequestUrl,
+  pullRequestRefForLink,
   pullRequestCandidateUrlFromReferenceAutolink,
   shouldOpenPullRequestExternally,
 } from "./openPullRequestLink";
@@ -354,5 +355,25 @@ describe("findProjectForChangeRequest", () => {
         number: 1,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("unlinked PR link targets", () => {
+  const link = { host: "github.com", repository: "someone/other-repo", number: 42 };
+  it("reads another repository without a project when the server supports it", () => {
+    expect(pullRequestRefForLink(undefined, link, true)).toEqual({
+      projectId: null,
+      repository: "someone/other-repo",
+      number: 42,
+    });
+  });
+  it("leaves old servers and other hosts on their existing fallback", () => {
+    expect(pullRequestRefForLink(undefined, link, false)).toBeNull();
+    expect(
+      pullRequestRefForLink(undefined, { ...link, host: "github.example.com" }, true),
+    ).toBeNull();
+    expect(
+      pullRequestRefForLink(undefined, { ...link, host: "github.com.evil.test" }, true),
+    ).toBeNull();
   });
 });
