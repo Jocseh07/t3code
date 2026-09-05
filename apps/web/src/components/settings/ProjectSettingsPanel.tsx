@@ -7,12 +7,13 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
   deriveProjectGroupingOverrideKey,
   selectProjectGroupingSettings,
 } from "../../logicalProject";
 import {
+  AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   EnvironmentAuthorizationError,
   type EnvironmentId,
@@ -30,6 +31,7 @@ import {
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectAutoPull } from "@t3tools/shared/serverSettings";
+import * as Option from "effect/Option";
 import {
   projectScriptsInheritDefaults,
   resolveProjectScripts,
@@ -77,10 +79,11 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environmen
 import { useProjects, useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
-import { readEnvironmentScope } from "../../state/session";
+import { environmentSession, readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
+import { useComposerMenuState } from "../chat/useComposerMenuState";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
@@ -414,6 +417,25 @@ function ProjectDetail({
     group.memberProjects.find(
       (member) => environmentById.get(member.environmentId)?.serverConfig != null,
     ) ?? group.memberProjects[0]!;
+  const groupSessions = useAtomValue(
+    useMemo(
+      () =>
+        Atom.make((get) =>
+          Array.from(new Set(group.memberProjects.map((member) => member.environmentId)), (id) =>
+            get(environmentSession.sessionStateAtom(id)),
+          ),
+        ),
+      [group.memberProjects],
+    ),
+  );
+  const canEditGroup = groupSessions.every((result) => {
+    const session = Option.getOrNull(AsyncResult.value(result));
+    return (
+      result._tag !== "Failure" &&
+      session?.authenticated === true &&
+      session.scopes?.includes(AuthOrchestrationOperateScope) === true
+    );
+  });
   // Provider instances and model options belong to the environment that runs
   // the project's threads. The hosted app has no primary environment, so
   // reading them from there would show "No providers available" everywhere.
@@ -522,6 +544,25 @@ function ProjectDetail({
     );
   }, []);
 
+  const checkProjectAccess = useCallback(
+    (members: ReadonlyArray<SidebarProjectGroupMember>, failureTitle: string) => {
+      const denied = members.find(
+        (member) => !readEnvironmentScope(member.environmentId, AuthOrchestrationOperateScope),
+      );
+      if (!denied) return null;
+      const result = AsyncResult.failure<void, Error>(
+        Cause.fail(
+          new Error(
+            `This connection cannot change projects in ${denied.environmentLabel ?? "this environment"}.`,
+          ),
+        ),
+      );
+      reportFailure(failureTitle, result);
+      return result;
+    },
+    [reportFailure],
+  );
+
   // Group-shared fields live on each physical project record, so a
   // group-level edit fans out to every member.
   const updateAllMembers = useCallback(
@@ -536,7 +577,11 @@ function ProjectDetail({
       }>,
       failureTitle: string,
     ): Promise<AtomCommandResult<void, unknown>> => {
+      const denied = checkProjectAccess(group.memberProjects, failureTitle);
+      if (denied) return denied;
       for (const member of group.memberProjects) {
+        const revoked = checkProjectAccess([member], failureTitle);
+        if (revoked) return revoked;
         const result = mapAtomCommandResult(
           await updateProject({
             environmentId: member.environmentId,
@@ -558,7 +603,7 @@ function ProjectDetail({
       }
       return AsyncResult.success(undefined);
     },
-    [group.memberProjects, reportFailure, updateProject],
+    [checkProjectAccess, group.memberProjects, reportFailure, updateProject],
   );
 
   const renameGroup = useCallback(
@@ -583,6 +628,7 @@ function ProjectDetail({
   );
 
   // ----- default model -----
+  const [modelPickerOpen, setModelPickerOpen] = useComposerMenuState(!canEditGroup);
   const storedSelection = representative.defaultModelSelection;
   const resolvedSelection = resolveDefaultProviderModelSelection(
     serverProviders,
@@ -661,6 +707,7 @@ function ProjectDetail({
   };
 
   // ----- new-thread workspace mode -----
+  const [workspacePickerOpen, setWorkspacePickerOpen] = useComposerMenuState(!canEditGroup);
   const storedEnvMode = representative.defaultThreadEnvMode ?? null;
   const mixedWorkspace = group.memberProjects.some(
     (member) => member.defaultThreadEnvMode !== storedEnvMode,
@@ -694,8 +741,8 @@ function ProjectDetail({
     setBooleanOverride("projectAutoPullOverrides", enabled);
 
   // ----- project icon -----
-  const [faviconPickerOpen, setFaviconPickerOpen] = useState(false);
-  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [faviconPickerOpen, setFaviconPickerOpen] = useComposerMenuState(!canEditGroup);
+  const [iconPickerOpen, setIconPickerOpen] = useComposerMenuState(!canEditGroup);
   const [isSavingFavicon, setIsSavingFavicon] = useState(false);
   const savingFaviconRef = useRef(false);
   const setProjectIcon = useCallback(
@@ -720,6 +767,10 @@ function ProjectDetail({
     (member) => member.physicalProjectKey === selectedCheckoutKey,
   );
   const selectedCheckout = selectedCheckoutMatch ?? representative;
+  const canEditCheckout = useEnvironmentScope(
+    selectedCheckout.environmentId,
+    AuthOrchestrationOperateScope,
+  );
   const selectedServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(selectedCheckout.environmentId),
   );
@@ -770,6 +821,7 @@ function ProjectDetail({
 
   const importFileScript = useCallback(
     async (fileScript: T3ProjectFileScript) => {
+      if (checkProjectAccess([selectedCheckout], "Failed to import action")) return;
       const payload: NewProjectScriptInput = {
         name: fileScript.name,
         command: fileScript.command,
@@ -791,7 +843,7 @@ function ProjectDetail({
         });
       }
     },
-    [selectedCheckout.environmentId, submitScript, setEditorRequest],
+    [checkProjectAccess, selectedCheckout, submitScript, setEditorRequest],
   );
 
   // ----- checkouts -----
@@ -811,6 +863,7 @@ function ProjectDetail({
 
   const removeMembers = useCallback(
     async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
+      if (checkProjectAccess(members, "Failed to remove project")) return;
       const api = readLocalApi();
       if (!api) return;
 
@@ -850,9 +903,11 @@ function ProjectDetail({
         ),
       );
       if (confirmed._tag === "Failure" || !confirmed.value) return;
+      if (checkProjectAccess(members, "Failed to remove project")) return;
 
       const draftStore = useComposerDraftStore.getState();
       for (const member of members) {
+        if (checkProjectAccess([member], "Failed to remove project")) return;
         const memberThreads = projectThreads.filter(
           (thread) =>
             thread.environmentId === member.environmentId && thread.projectId === member.id,
@@ -896,6 +951,7 @@ function ProjectDetail({
       }
     },
     [
+      checkProjectAccess,
       deleteProject,
       group.displayName,
       group.memberProjects.length,
@@ -926,7 +982,18 @@ function ProjectDetail({
   return (
     <>
       <SettingsPageContainer className="gap-6">
-        <SettingsSection title="Project" hideTitle>
+        <SettingsSection
+          title="Project"
+          // The title only appears when there is a permission note to attach to it.
+          hideTitle={canEditGroup}
+          description={
+            !canEditGroup
+              ? group.memberProjects.length > 1
+                ? "Shared settings require permission to change every checkout in this group."
+                : "This connection cannot change this project."
+              : undefined
+          }
+        >
           <SettingsRow
             title="Name"
             description="The shared name for this project group in the sidebar and thread lists."
@@ -936,6 +1003,7 @@ function ProjectDetail({
                 size="sm"
                 className="w-full sm:w-64"
                 aria-label="Project name"
+                disabled={!canEditGroup}
                 defaultValue={group.displayName}
                 onChange={() => {
                   projectNameEditedRef.current = true;
@@ -964,7 +1032,7 @@ function ProjectDetail({
               faviconPath !== null || projectIcon !== null ? (
                 <SettingResetButton
                   label="project icon"
-                  disabled={isSavingFavicon}
+                  disabled={isSavingFavicon || !canEditGroup}
                   onClick={() => void setProjectIcon({ faviconPath: null, projectIcon: null })}
                 />
               ) : null
@@ -984,7 +1052,7 @@ function ProjectDetail({
                   variant="outline"
                   type="button"
                   aria-label="Choose a project icon"
-                  disabled={isSavingFavicon}
+                  disabled={isSavingFavicon || !canEditGroup}
                   onClick={() => setIconPickerOpen(true)}
                 >
                   Choose icon
@@ -994,7 +1062,7 @@ function ProjectDetail({
                   variant="outline"
                   type="button"
                   aria-label="Choose a project icon file"
-                  disabled={isSavingFavicon}
+                  disabled={isSavingFavicon || !canEditGroup}
                   onClick={() => setFaviconPickerOpen(true)}
                 >
                   Choose file
@@ -1021,6 +1089,7 @@ function ProjectDetail({
                 <SettingResetButton
                   label="project default model"
                   tooltip="Reset to inherited model"
+                  disabled={!canEditGroup}
                   onClick={() => setDefaultModel(null)}
                 />
               ) : null
@@ -1029,6 +1098,9 @@ function ProjectDetail({
               resolvedSelection && activeEntry ? (
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
                   <ProviderModelPicker
+                    disabled={!canEditGroup}
+                    open={canEditGroup && modelPickerOpen}
+                    onOpenChange={setModelPickerOpen}
                     activeInstanceId={resolvedSelection.instanceId}
                     model={resolvedSelection.model}
                     lockedProvider={null}
@@ -1047,6 +1119,7 @@ function ProjectDetail({
                     }}
                   />
                   <TraitsPicker
+                    disabled={!canEditGroup}
                     provider={activeEntry.driverKind as ProviderDriverKind}
                     models={activeEntry.models}
                     model={resolvedSelection.model}
@@ -1092,12 +1165,16 @@ function ProjectDetail({
                 <SettingResetButton
                   label="project workspace default"
                   tooltip="Reset to inherited workspace"
+                  disabled={!canEditGroup}
                   onClick={() => setDefaultThreadEnvMode(null)}
                 />
               ) : null
             }
             control={
               <Select
+                disabled={!canEditGroup}
+                open={canEditGroup && workspacePickerOpen}
+                onOpenChange={setWorkspacePickerOpen}
                 value={storedEnvMode ?? "inherit"}
                 onValueChange={(value) => {
                   if (value === "worktree" || value === "local") {
@@ -1143,7 +1220,7 @@ function ProjectDetail({
                 <SettingResetButton
                   label="automatic pull"
                   tooltip="Reset to inherited automatic pull setting"
-                  disabled={savingBrowserAccess}
+                  disabled={savingBrowserAccess || !canEditGroup}
                   onClick={() => void setAutoPull(undefined)}
                 />
               ) : null
@@ -1151,7 +1228,7 @@ function ProjectDetail({
             control={
               <Switch
                 checked={autoPull}
-                disabled={savingBrowserAccess}
+                disabled={savingBrowserAccess || !canEditGroup}
                 aria-label="Automatically pull the default branch"
                 onCheckedChange={(enabled) => void setAutoPull(enabled)}
               />
@@ -1301,6 +1378,7 @@ function ProjectDetail({
                 <Button
                   size="sm"
                   variant="destructive-outline"
+                  disabled={!canEditCheckout}
                   onClick={() => void removeMembers([selectedCheckout])}
                 >
                   <Trash2Icon className="size-3.5" />
@@ -1316,6 +1394,7 @@ function ProjectDetail({
                 {scriptsInherited
                   ? "Inherited from machine defaults."
                   : `Overridden for ${selectedCheckoutLabel}.`}
+                {!canEditCheckout && " This connection cannot change actions in this checkout."}
               </p>
             </div>
             <div className="flex w-full flex-wrap gap-1.5 sm:w-auto sm:shrink-0 sm:justify-end">
@@ -1331,7 +1410,12 @@ function ProjectDetail({
                 <Menu>
                   <MenuTrigger
                     render={
-                      <Button size="xs" variant="ghost" disabled={isSavingScripts} type="button" />
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        disabled={isSavingScripts || !canEditCheckout}
+                        type="button"
+                      />
                     }
                   >
                     Import scripts
@@ -1348,6 +1432,7 @@ function ProjectDetail({
                     {importableScripts.map((fileScript) => (
                       <MenuItem
                         key={`${fileScript.name} ${fileScript.command}`}
+                        disabled={isSavingScripts || !canEditCheckout}
                         onClick={() => void importFileScript(fileScript)}
                       >
                         <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4 shrink-0" />
@@ -1365,7 +1450,7 @@ function ProjectDetail({
               <Button
                 size="xs"
                 variant="outline"
-                disabled={isSavingScripts}
+                disabled={isSavingScripts || !canEditCheckout}
                 onClick={() =>
                   setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT })
                 }
@@ -1378,7 +1463,7 @@ function ProjectDetail({
           <ProjectActionsList
             scripts={scripts}
             keybindings={keybindings}
-            disabled={isSavingScripts}
+            disabled={isSavingScripts || !canEditCheckout}
             onEdit={(script) => setEditorRequest(editorRequestForScript(script, keybindings))}
           />
           {t3File.status === "invalid" ? (
@@ -1410,6 +1495,7 @@ function ProjectDetail({
               <Button
                 size="sm"
                 variant="destructive-outline"
+                disabled={!canEditGroup}
                 onClick={() => void removeMembers(group.memberProjects)}
               >
                 <Trash2Icon />
@@ -1441,10 +1527,10 @@ function ProjectDetail({
           ? { onPickExternal: () => pickProjectFavicon(representative.workspaceRoot) }
           : {})}
         onSelect={(path) => void setProjectIcon({ faviconPath: path, projectIcon: null })}
-        open={faviconPickerOpen}
+        open={faviconPickerOpen && canEditGroup}
         projectName={group.displayName}
       />
-      {iconPickerOpen ? (
+      {iconPickerOpen && canEditGroup ? (
         <Suspense fallback={null}>
           <ProjectIconPickerDialog
             current={projectIcon}
