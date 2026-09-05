@@ -15,6 +15,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  AuthOrchestrationOperateScope,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -824,6 +825,7 @@ import {
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { readEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 
@@ -1045,6 +1047,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
+  canOperateThread: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
@@ -1085,6 +1088,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
       ) : null}
       <ComposerPrimaryActions
         compact={props.compact}
+        canOperateThread={props.canOperateThread}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
@@ -1169,6 +1173,7 @@ export interface ChatComposerHandle {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  canOperateThread: boolean;
   attachmentUploadsCapabilityKnown: boolean;
   supportsAttachmentUploads: boolean;
   maxFileAttachmentBytes: number | null;
@@ -1318,6 +1323,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const {
     composerDraftTarget,
     environmentId,
+    canOperateThread,
     attachmentUploadsCapabilityKnown,
     supportsAttachmentUploads,
     maxFileAttachmentBytes,
@@ -1495,7 +1501,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
 
   useEffect(() => {
-    if (!attachmentUploadsCapabilityKnown) {
+    if (!attachmentUploadsCapabilityKnown || !canOperateThread) {
       return;
     }
     if (!supportsAttachmentUploads) {
@@ -1531,6 +1537,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
   }, [
     attachmentUploadsCapabilityKnown,
+    canOperateThread,
     composerDraftTarget,
     composerFiles,
     composerImages,
@@ -2868,7 +2875,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const submitComposer = useCallback(
     (event?: { preventDefault: () => void }, intent: ComposerSubmissionIntent = "foreground") => {
-      if (noProviderAvailable || isSendDisabled) {
+      if (
+        noProviderAvailable ||
+        isSendDisabled ||
+        !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+      ) {
         event?.preventDefault();
         return;
       }
@@ -2907,6 +2918,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThreadId,
       activePendingProgress,
       blurMobileComposerAfterSend,
+      environmentId,
       isSendDisabled,
       noProviderAvailable,
       onSend,
@@ -2925,6 +2937,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [isMobileViewport, routeKind, submitComposer]);
   const compactThreadContext = useCallback(() => {
     if (
+      !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       compactDisabled ||
       noProviderAvailable ||
       activePendingApproval !== null ||
@@ -2964,6 +2977,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     compactDisabled,
     composerDraftTarget,
+    environmentId,
     isConnecting,
     isSendBusy,
     noProviderAvailable,
@@ -4817,6 +4831,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     <ComposerBanner.Actions>
                       <ComposerPendingApprovalActions
                         requestId={activePendingApproval.requestId}
+                        disabled={!canOperateThread}
                         isResponding={respondingRequestIds.includes(
                           activePendingApproval.requestId,
                         )}
@@ -4828,6 +4843,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 ) : !isComposerCollapsedMobile && pendingUserInputs.length > 0 ? (
                   <ComposerPendingUserInputPanel
                     pendingUserInputs={pendingUserInputs}
+                    disabled={!canOperateThread}
                     respondingRequestIds={respondingRequestIds}
                     answers={activePendingDraftAnswers}
                     questionIndex={activePendingQuestionIndex}
@@ -4844,6 +4860,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <div data-chat-composer-collapsed-controls="true">
                     <ComposerPendingUserInputPanel
                       pendingUserInputs={pendingUserInputs}
+                      disabled={!canOperateThread}
                       respondingRequestIds={respondingRequestIds}
                       answers={activePendingDraftAnswers}
                       questionIndex={activePendingQuestionIndex}
@@ -4881,6 +4898,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           {activePendingProgress?.activeQuestion?.multiSelect ? (
                             <ComposerPrimaryActions
                               compact
+                              canOperateThread={canOperateThread}
                               pendingAction={pendingPrimaryAction}
                               isRunning={false}
                               showPlanFollowUpPrompt={false}
@@ -5063,12 +5081,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     {...(supportsAttachmentUploads
                       ? {
                           uploadsByImageId,
-                          onRetryUpload: (image: ComposerImageAttachment) =>
-                            retryAttachmentUpload({
-                              environmentId,
-                              image,
-                              draftTarget: composerDraftTarget,
-                            }),
+                          ...(canOperateThread
+                            ? {
+                                onRetryUpload: (image: ComposerImageAttachment) =>
+                                  retryAttachmentUpload({
+                                    environmentId,
+                                    image,
+                                    draftTarget: composerDraftTarget,
+                                  }),
+                              }
+                            : {}),
                         }
                       : {})}
                     onRemove={(annotationId) => {
@@ -5193,6 +5215,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                           draftTarget: composerDraftTarget,
                                         })
                                       }
+                                      disabled={!canOperateThread}
                                       aria-label={`Retry upload for ${image.name}`}
                                     />
                                   }
@@ -5272,6 +5295,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                         draftTarget: composerDraftTarget,
                                       })
                                     }
+                                    disabled={!canOperateThread}
                                     aria-label={`Retry upload for ${file.name}`}
                                   />
                                 }
@@ -5345,6 +5369,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                         draftTarget: composerDraftTarget,
                                       })
                                     }
+                                    disabled={!canOperateThread}
                                     aria-label={`Retry upload for ${file.name}`}
                                   />
                                 }
@@ -5453,6 +5478,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   >
                     <ComposerPrimaryActions
                       compact
+                      canOperateThread={canOperateThread}
                       pendingAction={pendingPrimaryAction}
                       isRunning={false}
                       showPlanFollowUpPrompt={false}
@@ -5551,6 +5577,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   ) : null}
                   <ComposerFooterPrimaryActions
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
+                    canOperateThread={canOperateThread}
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null
                     }
