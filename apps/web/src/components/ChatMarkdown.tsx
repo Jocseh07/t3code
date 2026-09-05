@@ -2862,7 +2862,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
                           preventDefault: () => undefined,
                           stopPropagation: () => undefined,
                         },
-                        target,
+                        pullRequestCandidateUrl ?? target,
                         undefined,
                         environmentId ?? undefined,
                       );
