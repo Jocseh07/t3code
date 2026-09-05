@@ -1436,7 +1436,9 @@ function PullRequestsRouteView() {
 
   const selectSurfaceInUrl = (surface: PullRequestSurface | null) =>
     updateSearch(
-      surface === null
+      // URL selection addresses a project's list row. An unlinked PR is held by its panel tab;
+      // writing only its repository/number would bind it to the current list's project scope.
+      surface === null || surface.projectId === null
         ? clearedSelection
         : {
             repository: surface.repository,
@@ -1919,7 +1921,7 @@ function PullRequestsRouteView() {
               key={renderedPullRequestSurface.id}
               environmentId={panelEnvironmentId}
               reference={{
-                projectId: renderedPullRequestSurface.projectId as ProjectId,
+                projectId: renderedPullRequestSurface.projectId as ProjectId | null,
                 repository: renderedPullRequestSurface.repository,
                 number: renderedPullRequestSurface.number,
               }}
