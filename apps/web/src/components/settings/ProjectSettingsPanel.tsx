@@ -775,7 +775,9 @@ function ProjectDetail({
         command: fileScript.command,
         icon: fileScript.icon ?? "play",
         runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
-        keybinding: null,
+        ...(readEnvironmentScope(selectedCheckout.environmentId, AuthSettingsWriteScope)
+          ? { keybinding: null }
+          : {}),
         previewUrl: fileScript.previewUrl ?? null,
         autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
       };
@@ -789,7 +791,7 @@ function ProjectDetail({
         });
       }
     },
-    [submitScript, setEditorRequest],
+    [selectedCheckout.environmentId, submitScript, setEditorRequest],
   );
 
   // ----- checkouts -----
