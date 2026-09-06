@@ -65,7 +65,7 @@ function labelForKind(kind: ServerProviderUsageWindow["kind"]): string {
  * `windowDurationMins`; when it does not, paid plans expose the 5-hour and
  * weekly pair and Free/Go expose one monthly allowance.
  */
-export function codexRateLimitsToWindows(
+function codexRateLimitsToWindows(
   snapshot: CodexRateLimitSnapshot,
 ): ReadonlyArray<ServerProviderUsageWindow> {
   const isMonthlyPlan = snapshot.planType === "free" || snapshot.planType === "go";
