@@ -595,6 +595,7 @@ export function useSharedSettingsSync() {
       return;
     }
     const patch = pickSharedServerSettings(primarySettings, primaryCapabilities);
+    const deniedLabels: string[] = [];
     for (const mismatch of mismatches) {
       const target = environments.find(
         (candidate) => candidate.environmentId === mismatch.environmentId,
@@ -603,13 +604,22 @@ export function useSharedSettingsSync() {
         !requiredScopesForServerSettingsPatch(patch).every((scope) =>
           readEnvironmentScope(mismatch.environmentId, scope),
         )
-      )
+      ) {
+        deniedLabels.push(mismatch.label);
         continue;
+      }
       void persistServerSettings({
         environmentId: mismatch.environmentId,
         input: {
           patch: filterSharedServerPatch(patch, target?.serverConfig?.environment.capabilities),
         },
+      });
+    }
+    if (deniedLabels.length > 0) {
+      toastManager.add({
+        type: "warning",
+        title: "Settings not applied everywhere",
+        description: `This connection does not have permission to change settings on ${deniedLabels.join(", ")}.`,
       });
     }
   }, [environments, mismatches, persistServerSettings, primarySettings, primaryCapabilities]);
