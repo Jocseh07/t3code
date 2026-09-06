@@ -73,6 +73,8 @@ const GitHubRepositoryName = Schema.String.check(
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/u),
 );
 
+const isGitHubRepositoryName = Schema.is(GitHubRepositoryName);
+
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
 }
@@ -692,7 +694,7 @@ export const make = Effect.gen(function* () {
       if (api === null) {
         return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
       }
-      if (!Schema.is(GitHubRepositoryName)(ref.repository)) {
+      if (!isGitHubRepositoryName(ref.repository)) {
         return Effect.fail(
           new PullRequestOperationError({
             operation: "resolveRepository",
