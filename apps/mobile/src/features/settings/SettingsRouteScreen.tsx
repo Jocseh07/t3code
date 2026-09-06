@@ -45,6 +45,7 @@ import {
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   type ServerSettingsPatch,
+  sessionGrantsScope,
 } from "@t3tools/contracts";
 import {
   filterSharedServerPatch,
@@ -587,8 +588,7 @@ function AutoSettleSettingsRows() {
             canWriteSettings:
               result._tag === "Initial"
                 ? null
-                : session?.authenticated === true &&
-                  session.scopes?.includes(AuthSettingsWriteScope) === true,
+                : session !== null && sessionGrantsScope(session, AuthSettingsWriteScope),
           };
         }),
       ),
