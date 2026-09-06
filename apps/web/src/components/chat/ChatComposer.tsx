@@ -5253,7 +5253,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             retryAttachmentUpload({
                               environmentId,
                               image,
-                              draftTarget: composerDraftTarget,
+                              draftTarget: attachmentDraftTarget,
                             }),
                         }
                       : {})}
@@ -5375,7 +5375,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                         retryAttachmentUpload({
                                           environmentId,
                                           image,
-                                          draftTarget: composerDraftTarget,
+                                          draftTarget: attachmentDraftTarget,
                                         })
                                       }
                                       aria-label={`Retry upload for ${image.name}`}
@@ -5454,7 +5454,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                       retryAttachmentUpload({
                                         environmentId,
                                         image: file,
-                                        draftTarget: composerDraftTarget,
+                                        draftTarget: attachmentDraftTarget,
                                       })
                                     }
                                     aria-label={`Retry upload for ${file.name}`}
@@ -5526,7 +5526,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                       retryAttachmentUpload({
                                         environmentId,
                                         image: file,
-                                        draftTarget: composerDraftTarget,
+                                        draftTarget: attachmentDraftTarget,
                                       })
                                     }
                                     aria-label={`Retry upload for ${file.name}`}
