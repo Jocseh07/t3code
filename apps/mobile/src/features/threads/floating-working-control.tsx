@@ -54,7 +54,8 @@ export const FLOATING_WORKING_CONTROL_COVERAGE = CONTROL_OVERLAY_OFFSET + CONTRO
 export type FloatingWorkingStatus =
   | { readonly kind: "working"; readonly startedAt: string }
   | { readonly kind: "syncing"; readonly label: string }
-  | { readonly kind: "compacting" };
+  | { readonly kind: "compacting" }
+  | { readonly kind: "preparing"; readonly label: string };
 
 export function FloatingWorkingControl(props: {
   readonly colorScheme: "light" | "dark";
@@ -202,6 +203,23 @@ function FloatingStatusLabel(props: { readonly status: FloatingWorkingStatus }) 
   }
   if (props.status.kind === "compacting") {
     return <CompactingLabel />;
+  }
+  if (props.status.kind === "preparing") {
+    return (
+      <View
+        accessible
+        accessibilityLabel={props.status.label}
+        className="h-11 flex-row items-center gap-1.5 px-4"
+      >
+        <SymbolView
+          name="arrow.triangle.branch"
+          size={13}
+          tintColorClassName="foreground"
+          type="monochrome"
+        />
+        <Text className="font-t3-medium text-xs text-foreground">{props.status.label}</Text>
+      </View>
+    );
   }
   return <WorkingDuration startedAt={props.status.startedAt} />;
 }
