@@ -686,7 +686,8 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<PullRequestRepository, PullRequestError> => {
     if (ref.projectId === null) {
       // An explicit host keeps the CLI from inferring a repository from its working directory.
-      // Other hosts still use their linked project until their adapters support checkout-free reads.
+      // GitHub permissions govern remote review actions; a linked project is only needed
+      // for operations that use a local checkout. Other hosts still require a linked project.
       const api = registry.get("github");
       if (api === null) {
         return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));

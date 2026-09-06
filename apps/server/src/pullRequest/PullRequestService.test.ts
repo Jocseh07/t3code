@@ -4173,6 +4173,59 @@ it.effect("reads an unlinked GitHub PR and its diff without a workspace", () =>
   }),
 );
 
+it.effect("checks fresh GitHub permissions for unlinked PR actions and comments", () =>
+  Effect.gen(function* () {
+    let allowed = true;
+    const permissions: Array<{ repository: string; host: string; number: number }> = [];
+    const writes: string[] = [];
+    const service = yield* makeService({
+      projects: [],
+      providers: [
+        fakeProvider("github", {
+          getViewerPermissions: (input) => {
+            permissions.push(input);
+            return Effect.succeed({
+              actions: allowed ? ["close"] : [],
+              comment: allowed,
+              resolve: false,
+              verdicts: [],
+              requestReviewers: false,
+            });
+          },
+          runAction: (input) => {
+            writes.push(input.action);
+            return Effect.void;
+          },
+          comment: (input) => {
+            writes.push(input.body);
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: null, repository: "someone/other-repo", number: 1 };
+    yield* service.runAction({ ...reference, action: "close" });
+    yield* service.comment({ ...reference, body: "First comment" });
+
+    allowed = false;
+    const actionError = yield* Effect.flip(service.runAction({ ...reference, action: "close" }));
+    const commentError = yield* Effect.flip(
+      service.comment({ ...reference, body: "After access was withdrawn" }),
+    );
+    assert.strictEqual(actionError._tag, "PullRequestOperationError");
+    assert.strictEqual(commentError._tag, "PullRequestOperationError");
+    assert.deepStrictEqual(writes, ["close", "First comment"]);
+    assert.deepStrictEqual(
+      permissions.map(({ repository, host, number }) => ({ repository, host, number })),
+      Array.from({ length: 4 }, () => ({
+        repository: reference.repository,
+        host: "github.com",
+        number: 1,
+      })),
+    );
+  }),
+);
+
 it.effect("rejects malformed unlinked repositories before calling GitHub", () =>
   Effect.gen(function* () {
     const service = yield* makeService({ projects: [], providers: [fakeProvider("github")] });
