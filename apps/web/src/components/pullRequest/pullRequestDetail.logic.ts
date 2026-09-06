@@ -138,6 +138,7 @@ export function isThreadOwnPullRequest(
   },
 ): boolean {
   return (
+    thread.projectId !== null &&
     thread.projectId === surface.projectId &&
     thread.repository === surface.repository &&
     thread.number === surface.number

@@ -1268,6 +1268,15 @@ describe("whether the panel is showing the thread's own pull request", () => {
     ).toBe(false);
   });
 
+  it.each([null, "proj-a"])("rejects an unlinked PR for thread project %s", (projectId) => {
+    expect(
+      isThreadOwnPullRequest(
+        { projectId, repository: "acme/app", number: 7 },
+        { ...surface, projectId: null },
+      ),
+    ).toBe(false);
+  });
+
   it("rejects a thread with no project or no pull request of its own", () => {
     expect(
       isThreadOwnPullRequest({ projectId: null, repository: "acme/app", number: 7 }, surface),
