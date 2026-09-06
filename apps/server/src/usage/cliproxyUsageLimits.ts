@@ -114,7 +114,7 @@ function planLabel(account: typeof QuotaAccount.Type): string | undefined {
   return undefined;
 }
 
-export function cliproxyAccountToUsageLimits(
+function cliproxyAccountToUsageLimits(
   account: typeof QuotaAccount.Type,
   checkedAt: string,
 ): ServerProviderUsageLimits {
