@@ -35,6 +35,7 @@ export function ProjectDefaultActionsSettings({
       JSON.stringify(scripts),
   );
   const [request, setRequest] = useState<ProjectScriptEditorRequest | null>(null);
+  const editorEnvironmentId = targets[0]?.environmentId ?? null;
   const { saving, persist, submit } = useProjectScriptSettings(
     targets.flatMap(({ environmentId, serverConfig }) =>
       serverConfig
@@ -100,15 +101,20 @@ export function ProjectDefaultActionsSettings({
           onEdit={(script) => setRequest(editorRequestForScript(script, keybindings))}
         />
       )}
-      <ProjectScriptEditorDialog
-        request={request}
-        scripts={scripts}
-        onSubmit={submit}
-        onDelete={(id) =>
-          void persist((current) => current.filter((script) => script.id !== id), id, null)
-        }
-        onClose={() => setRequest(null)}
-      />
+      {editorEnvironmentId ? (
+        // The editor's controls follow one machine's grant; the write itself
+        // checks every selected machine before it touches any of them.
+        <ProjectScriptEditorDialog
+          environmentId={editorEnvironmentId}
+          request={request}
+          scripts={scripts}
+          onSubmit={submit}
+          onDelete={(id) =>
+            void persist((current) => current.filter((script) => script.id !== id), id, null)
+          }
+          onClose={() => setRequest(null)}
+        />
+      ) : null}
     </SettingsSection>
   );
 }
