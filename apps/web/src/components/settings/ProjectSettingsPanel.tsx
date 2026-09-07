@@ -995,18 +995,14 @@ function ProjectDetail({
   return (
     <>
       <SettingsPageContainer className="gap-6">
-        <SettingsSection
-          title="Project"
-          // The title only appears when there is a permission note to attach to it.
-          hideTitle={canEditGroup}
-          description={
-            !canEditGroup
-              ? group.memberProjects.length > 1
+        <SettingsSection title="Project" hideTitle>
+          {!canEditGroup ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground sm:px-4">
+              {group.memberProjects.length > 1
                 ? "Shared settings require permission to change every checkout in this group."
-                : "This connection cannot change this project."
-              : undefined
-          }
-        >
+                : "This connection cannot change this project."}
+            </p>
+          ) : null}
           <SettingsRow
             title="Name"
             description="The shared name for this project group in the sidebar and thread lists."
