@@ -266,10 +266,9 @@ export function UsagePage() {
         </ToggleGroup>
         <Button
           onClick={refreshWindow}
-          disabled={!showingLimits && !canReadDiagnostics}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
           aria-busy={isRefreshing}
-          disabled={isRefreshing}
+          disabled={isRefreshing || (!showingLimits && !canReadDiagnostics)}
           size="icon-sm"
           variant="ghost"
         >
@@ -326,10 +325,9 @@ export function UsagePage() {
         </Select>
         <Button
           onClick={refreshWindow}
-          disabled={!showingLimits && !canReadDiagnostics}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
           aria-busy={isRefreshing}
-          disabled={isRefreshing}
+          disabled={isRefreshing || (!showingLimits && !canReadDiagnostics)}
           size="icon-sm"
           variant="ghost"
         >
