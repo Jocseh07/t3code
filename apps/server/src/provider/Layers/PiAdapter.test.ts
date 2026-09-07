@@ -8,6 +8,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -128,6 +129,7 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
 
       const requestId = yield* Deferred.await(requestOpened);
       const opened = runtimeEvents.find((event) => event.type === "request.opened");
+      assert.strictEqual(opened?.type, "request.opened");
       if (opened?.type === "request.opened") {
         assert.strictEqual(opened.payload.requestType, "exec_command_approval");
         assert.strictEqual(opened.payload.detail, "echo hi");
@@ -154,6 +156,7 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
         "turn.completed",
       ] as const);
       const delta = runtimeEvents.find((event) => event.type === "content.delta");
+      assert.strictEqual(delta?.type, "content.delta");
       if (delta?.type === "content.delta") {
         assert.strictEqual(delta.payload.delta, "Echo: hello pi");
       }
@@ -264,10 +267,12 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
         (event) =>
           event.type === "item.completed" && event.payload.itemType === "command_execution",
       );
+      assert.strictEqual(tool?.type, "item.completed");
       if (tool?.type === "item.completed") {
         assert.strictEqual(tool.payload.status, "failed");
       }
       const resolved = runtimeEvents.find((event) => event.type === "request.resolved");
+      assert.strictEqual(resolved?.type, "request.resolved");
       if (resolved?.type === "request.resolved") {
         assert.strictEqual(resolved.payload.decision, "decline");
       }
@@ -315,6 +320,7 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
         .pipe(Effect.forkChild);
       const { requestId, questionId } = yield* Deferred.await(requested);
       const opened = runtimeEvents.find((event) => event.type === "user-input.requested");
+      assert.strictEqual(opened?.type, "user-input.requested");
       if (opened?.type === "user-input.requested") {
         const question = opened.payload.questions[0];
         assert.strictEqual(question?.question, "Which color?");
@@ -332,6 +338,7 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
         (event) =>
           event.type === "item.completed" && event.payload.itemType === "dynamic_tool_call",
       );
+      assert.strictEqual(tool?.type, "item.completed");
       if (tool?.type === "item.completed") {
         const data = tool.payload.data as { rawOutput?: { content?: string } };
         assert.strictEqual(data.rawOutput?.content, "User selected option 2: Blue");
@@ -393,6 +400,7 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
         (event) =>
           event.type === "item.completed" && event.payload.itemType === "dynamic_tool_call",
       );
+      assert.strictEqual(tool?.type, "item.completed");
       if (tool?.type === "item.completed") {
         const data = tool.payload.data as { rawOutput?: { content?: string } };
         assert.strictEqual(data.rawOutput?.content, "User wrote their own answer: Teal, actually");
@@ -486,6 +494,7 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
       assert.strictEqual(runtimeEvents.filter((event) => event.type === "turn.started").length, 1);
       const completed = runtimeEvents.filter((event) => event.type === "turn.completed");
       assert.strictEqual(completed.length, 1);
+      assert.strictEqual(completed[0]?.type, "turn.completed");
       if (completed[0]?.type === "turn.completed") {
         assert.strictEqual(completed[0].payload.state, "completed");
       }
@@ -558,6 +567,54 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
           ["first", undefined],
           ["second", "steer"],
         ],
+      );
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("ends the turn as failed when pi rejects the prompt", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("pi-rejected-prompt-thread");
+      const { wrapperPath } = yield* Effect.promise(() =>
+        makeMockPiWrapper({ T3_PI_MOCK_REJECT_PROMPT: "1" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath, "/tmp/t3-code.ts");
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          runtimeEvents.push(event);
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("pi"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const outcome = yield* Effect.exit(
+        adapter.sendTurn({ threadId, input: "hello", attachments: [] }),
+      );
+      yield* Fiber.interrupt(eventsFiber);
+
+      assert.isTrue(Exit.isFailure(outcome));
+      const started = runtimeEvents.filter((event) => event.type === "turn.started");
+      const completed = runtimeEvents.filter((event) => event.type === "turn.completed");
+      assert.strictEqual(started.length, 1);
+      assert.strictEqual(completed.length, 1);
+      const failure = completed[0];
+      assert.strictEqual(failure?.type, "turn.completed");
+      if (failure?.type === "turn.completed") {
+        assert.strictEqual(failure.turnId, started[0]?.turnId);
+        assert.strictEqual(failure.payload.state, "failed");
+        assert.strictEqual(failure.payload.errorMessage, "pi refused the prompt.");
+      }
+      // The failed turn must not stay installed as the session's active one.
+      const sessions = yield* adapter.listSessions();
+      assert.strictEqual(
+        sessions.find((session) => session.threadId === threadId)?.activeTurnId,
+        undefined,
       );
       yield* adapter.stopSession(threadId);
     }),

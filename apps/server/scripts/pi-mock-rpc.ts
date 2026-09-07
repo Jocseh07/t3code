@@ -14,6 +14,7 @@
  *   T3_PI_MOCK_ASK_QUESTION=1     replace the bash tool with an ask_user-style question
  *   T3_PI_MOCK_SETTLE_ON_STEER=1  hold the first prompt open until a second `prompt`
  *                                 arrives, then settle the run once (for steer tests)
+ *   T3_PI_MOCK_REJECT_PROMPT=1    reject every `prompt` command (for turn-failure tests)
  *   T3_PI_MOCK_SELF_RUN=1         settle the first prompt immediately, then start one run
  *                                 nobody asked for (what a background terminal exit or a
  *                                 finished subagent does), held open until a prompt arrives
@@ -30,6 +31,7 @@ const hangPrompt = process.env.T3_PI_MOCK_HANG_PROMPT === "1";
 const askQuestion = process.env.T3_PI_MOCK_ASK_QUESTION === "1";
 const settleOnSteer = process.env.T3_PI_MOCK_SETTLE_ON_STEER === "1";
 const selfRun = process.env.T3_PI_MOCK_SELF_RUN === "1";
+const rejectPrompt = process.env.T3_PI_MOCK_REJECT_PROMPT === "1";
 
 if (args.includes("--version")) {
   process.stdout.write("0.84.4\n");
@@ -378,6 +380,16 @@ function runRpc() {
           respond(id, "set_session_name");
           break;
         case "prompt":
+          if (rejectPrompt) {
+            send({
+              ...(id ? { id } : {}),
+              type: "response",
+              command: "prompt",
+              success: false,
+              error: "pi refused the prompt.",
+            });
+            break;
+          }
           if (streaming && typeof command.streamingBehavior !== "string") {
             send({
               ...(id ? { id } : {}),

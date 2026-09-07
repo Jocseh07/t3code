@@ -47,6 +47,9 @@ export function piPrintModeArgs(modelSelection: ModelSelection): ReadonlyArray<s
     "--no-extensions",
     "--no-session",
     "--no-approve",
+    // `--no-approve` only distrusts project-local pi files. Titles and branch
+    // names are generated in the user's repo, so keep AGENTS.md out too.
+    "--no-context-files",
     ...(model && model !== PI_DEFAULT_MODEL ? ["--model", model] : []),
     ...(level && isPiThinkingLevel(level) ? ["--thinking", level] : []),
   ];

@@ -192,11 +192,18 @@ export interface PiMappingState {
   readonly openTextItems: Map<number, string>;
   /** Tool call id → tool name and args for `tool_execution_*` correlation. */
   readonly tools: Map<string, { readonly toolName: string; readonly args: unknown }>;
+  /** Item id of the compaction in progress, so its end closes what its start opened. */
+  compactionItemId: string | undefined;
   nextSyntheticId: () => string;
 }
 
 export function makePiMappingState(nextSyntheticId: () => string): PiMappingState {
-  return { openTextItems: new Map(), tools: new Map(), nextSyntheticId };
+  return {
+    openTextItems: new Map(),
+    tools: new Map(),
+    compactionItemId: undefined,
+    nextSyntheticId,
+  };
 }
 
 /**
@@ -413,11 +420,12 @@ export function mapPiEvent(input: {
     }
 
     case "compaction_start": {
+      state.compactionItemId = state.nextSyntheticId();
       return [
         {
           type: "item.started",
           ...baseEvent(stamp(), ctx),
-          itemId: RuntimeItemId.make(state.nextSyntheticId()),
+          itemId: RuntimeItemId.make(state.compactionItemId),
           payload: {
             itemType: "context_compaction",
             status: "inProgress",
@@ -429,27 +437,33 @@ export function mapPiEvent(input: {
     }
 
     case "compaction_end": {
-      if (!("result" in event)) return [];
-      const failed = event.aborted === true || event.result === null || event.result === undefined;
-      const summary = event.result?.summary;
+      // pi omits `result` when the compaction was aborted or errored, which is
+      // exactly when the started item most needs closing.
+      const result = "result" in event ? event.result : undefined;
+      const aborted = "aborted" in event ? event.aborted : undefined;
+      const errorMessage = "errorMessage" in event ? event.errorMessage : undefined;
+      const failed = aborted === true || result === null || result === undefined;
+      const summary = result?.summary;
+      const itemId = state.compactionItemId ?? state.nextSyntheticId();
+      state.compactionItemId = undefined;
       const events: Array<ProviderRuntimeEvent> = [
         {
           type: "item.completed",
           ...baseEvent(stamp(), ctx),
-          itemId: RuntimeItemId.make(state.nextSyntheticId()),
+          itemId: RuntimeItemId.make(itemId),
           payload: {
             itemType: "context_compaction",
             status: failed ? "failed" : "completed",
             title: "Compacted context",
-            ...(nonEmptyString(event.errorMessage) ? { detail: event.errorMessage } : {}),
+            ...(nonEmptyString(errorMessage) ? { detail: errorMessage } : {}),
             ...(summary ? { data: { summary } } : {}),
           },
           ...raw("compaction_end", event),
         },
       ];
       if (failed) return events;
-      const beforeTokens = finiteNonNegative(event.result?.tokensBefore);
-      const afterTokens = finiteNonNegative(event.result?.estimatedTokensAfter);
+      const beforeTokens = finiteNonNegative(result?.tokensBefore);
+      const afterTokens = finiteNonNegative(result?.estimatedTokensAfter);
       events.push({
         type: "thread.state.changed",
         ...baseEvent(stamp(), ctx),
@@ -479,16 +493,17 @@ export function mapPiEvent(input: {
     }
 
     case "auto_retry_start": {
-      if (!("attempt" in event)) return [];
-      const attempt = event.attempt ?? 1;
-      const max = event.maxAttempts ?? attempt;
+      // `attempt` is optional in pi's payload; a retry is still a retry.
+      const attempt = ("attempt" in event ? event.attempt : undefined) ?? 1;
+      const max = ("maxAttempts" in event ? event.maxAttempts : undefined) ?? attempt;
+      const retryError = "errorMessage" in event ? event.errorMessage : undefined;
       return [
         {
           type: "runtime.warning",
           ...baseEvent(stamp(), ctx),
           payload: {
             message: `pi is retrying after a transient error (attempt ${attempt} of ${max}).`,
-            ...(nonEmptyString(event.errorMessage) ? { detail: event.errorMessage } : {}),
+            ...(nonEmptyString(retryError) ? { detail: retryError } : {}),
           },
           ...raw("auto_retry_start", event),
         },

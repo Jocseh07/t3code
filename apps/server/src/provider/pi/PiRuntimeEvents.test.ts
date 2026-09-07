@@ -139,6 +139,7 @@ it("maps a streamed text block to item.started, content.delta, item.completed", 
     type: "message_update",
     assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "hmm" },
   });
+  assert.strictEqual(thinking[0]?.type, "content.delta");
   if (thinking[0]?.type === "content.delta") {
     assert.strictEqual(thinking[0].payload.streamKind, "reasoning_text");
   }
@@ -172,6 +173,7 @@ it("maps tool execution to command_execution items carrying command and output",
     result: { content: [{ type: "text", text: "total 0\n" }], details: {} },
     isError: false,
   });
+  assert.strictEqual(ended[0]?.type, "item.completed");
   if (ended[0]?.type === "item.completed") {
     assert.strictEqual(ended[0].payload.status, "completed");
     assert.strictEqual(ended[0].payload.itemType, "command_execution");
@@ -185,6 +187,7 @@ it("maps tool execution to command_execution items carrying command and output",
     result: { content: [{ type: "text", text: "nope" }] },
     isError: true,
   });
+  assert.strictEqual(failed[0]?.type, "item.completed");
   if (failed[0]?.type === "item.completed") {
     assert.strictEqual(failed[0].payload.status, "failed");
     assert.strictEqual(failed[0].payload.itemType, "file_change");
@@ -235,6 +238,45 @@ it("marks usage as auto-compacting when pi reports it enabled", () => {
   assert.isUndefined(plain?.compactsAutomatically);
 });
 
+it("closes the compaction item that compaction_start opened", () => {
+  const map = makeMapper();
+  const started = map({ type: "compaction_start", reason: "threshold" });
+  const ended = map({ type: "compaction_end", reason: "threshold", result: null, aborted: true });
+  assert.strictEqual(started[0]?.type, "item.started");
+  assert.strictEqual(ended[0]?.type, "item.completed");
+  assert.strictEqual(started[0]?.itemId, ended[0]?.itemId);
+  // The next compaction gets its own id rather than reusing the closed one.
+  const restarted = map({ type: "compaction_start", reason: "threshold" });
+  assert.notStrictEqual(restarted[0]?.itemId, started[0]?.itemId);
+});
+
+it("completes a compaction that ends without a result field", () => {
+  const map = makeMapper();
+  map({ type: "compaction_start", reason: "threshold" });
+  const events = map({ type: "compaction_end", reason: "threshold" });
+  assert.deepStrictEqual(
+    events.map((event) => event.type),
+    ["item.completed"],
+  );
+  assert.strictEqual(events[0]?.type, "item.completed");
+  if (events[0]?.type === "item.completed") {
+    assert.strictEqual(events[0].payload.status, "failed");
+  }
+});
+
+it("warns on auto_retry_start even when pi omits the attempt count", () => {
+  const map = makeMapper();
+  const events = map({ type: "auto_retry_start", errorMessage: "429 from the provider" });
+  assert.strictEqual(events[0]?.type, "runtime.warning");
+  if (events[0]?.type === "runtime.warning") {
+    assert.strictEqual(
+      events[0].payload.message,
+      "pi is retrying after a transient error (attempt 1 of 1).",
+    );
+    assert.strictEqual(events[0].payload.detail, "429 from the provider");
+  }
+});
+
 it("emits compacted state and post-compaction usage from compaction_end", () => {
   const map = makeMapper();
   const events = map({
@@ -248,15 +290,18 @@ it("emits compacted state and post-compaction usage from compaction_end", () => 
     ["item.completed", "thread.state.changed", "thread.token-usage.updated"],
   );
   const [item, compacted, usage] = events;
+  assert.strictEqual(item?.type, "item.completed");
   if (item?.type === "item.completed") {
     assert.strictEqual(item.payload.itemType, "context_compaction");
     assert.strictEqual(item.payload.status, "completed");
   }
+  assert.strictEqual(compacted?.type, "thread.state.changed");
   if (compacted?.type === "thread.state.changed") {
     assert.strictEqual(compacted.payload.state, "compacted");
     assert.strictEqual(compacted.payload.beforeTokens, 150_000);
     assert.strictEqual(compacted.payload.afterTokens, 32_000);
   }
+  assert.strictEqual(usage?.type, "thread.token-usage.updated");
   if (usage?.type === "thread.token-usage.updated") {
     assert.strictEqual(usage.payload.usage.usedTokens, 32_000);
     assert.strictEqual(usage.payload.usage.lastUsedTokens, 150_000);
@@ -271,6 +316,7 @@ it("emits only a failed item when compaction is aborted or fails", () => {
     aborted.map((event) => event.type),
     ["item.completed"],
   );
+  assert.strictEqual(aborted[0]?.type, "item.completed");
   if (aborted[0]?.type === "item.completed") {
     assert.strictEqual(aborted[0].payload.status, "failed");
   }
@@ -284,6 +330,7 @@ it("emits only a failed item when compaction is aborted or fails", () => {
     errored.map((event) => event.type),
     ["item.completed"],
   );
+  assert.strictEqual(errored[0]?.type, "item.completed");
   if (errored[0]?.type === "item.completed") {
     assert.strictEqual(errored[0].payload.detail, "quota exceeded");
   }

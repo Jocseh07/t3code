@@ -154,6 +154,8 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger = options.nativeEventLogger;
 
+    // `watchExit` closes the session scope, so it cannot run inside it.
+    const adapterScope = yield* Effect.scope;
     const sessions = new Map<ThreadId, PiSessionContext>();
     const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
@@ -496,7 +498,12 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
       });
 
     /** Ends `turnId`, clears the active-turn state, and reports how it ended. */
-    const completeTurn = (ctx: PiSessionContext, turnId: TurnId, stopReason: string | undefined) =>
+    const completeTurn = (
+      ctx: PiSessionContext,
+      turnId: TurnId,
+      stopReason: string | undefined,
+      errorMessage?: string,
+    ) =>
       Effect.gen(function* () {
         ctx.activeTurnId = undefined;
         ctx.syntheticTurnId = undefined;
@@ -515,7 +522,11 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
             : stopReason === "aborted"
               ? { state: "cancelled", stopReason }
               : stopReason === "error"
-                ? { state: "failed", stopReason, errorMessage: "pi reported an error." }
+                ? {
+                    state: "failed",
+                    stopReason,
+                    errorMessage: errorMessage ?? "pi reported an error.",
+                  }
                 : { state: "completed", stopReason: stopReason ?? null },
         });
       });
@@ -649,6 +660,10 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
                 ...(code === 0 ? {} : { reason: `pi exited with code ${code}.` }),
               },
             });
+            // `stopSession` closes the scope on its way out; a pi process that
+            // exits on its own has to reach the same place, or the client
+            // finalizer and the stderr reader stay parked on dead queues.
+            yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
           }),
         ),
       );
@@ -753,7 +768,7 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
 
           yield* consumeEvents(ctx).pipe(Effect.forkIn(sessionScope));
           yield* consumeStderr(ctx).pipe(Effect.forkIn(sessionScope));
-          yield* watchExit(ctx).pipe(Effect.forkIn(sessionScope));
+          yield* watchExit(ctx).pipe(Effect.forkIn(adapterScope));
 
           const state = (yield* client.request({ type: "get_state" }, { timeoutMs: 30_000 }).pipe(
             Effect.mapError(
@@ -933,6 +948,20 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
               Effect.catchIf(
                 (error) => !piBusy && /already processing/i.test(error.detail),
                 () => ctx.client.request({ ...prompt, streamingBehavior: "steer" as const }),
+              ),
+              // A rejected prompt would otherwise leave this turn installed as
+              // the active one with nothing left to settle it, and the next
+              // turn would inherit its settle signal. A rejected steer belongs
+              // to the turn that is still running, so it tears down nothing.
+              Effect.tapError((error) =>
+                steering
+                  ? Effect.void
+                  : Effect.gen(function* () {
+                      yield* completeTurn(ctx, turnId, "error", error.detail);
+                      if (ctx.agentRunning && !ctx.stopped) {
+                        yield* startSyntheticTurn(ctx);
+                      }
+                    }),
               ),
             );
 

@@ -154,6 +154,9 @@ function needsApproval(toolName: string): boolean {
   return true;
 }
 
+/** An MCP endpoint that accepts and never answers would park a tool call forever. */
+const MCP_TIMEOUT_MS = 30_000;
+
 async function mcpRequest(url: string, token: string, body: Json, sessionId: string | undefined) {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -161,7 +164,12 @@ async function mcpRequest(url: string, token: string, body: Json, sessionId: str
     authorization: "Bearer " + token,
   };
   if (sessionId) headers["mcp-session-id"] = sessionId;
-  const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
+  });
   const nextSessionId = response.headers.get("mcp-session-id") ?? sessionId;
   if (response.status === 202 || response.status === 204) {
     return { result: undefined, sessionId: nextSessionId };

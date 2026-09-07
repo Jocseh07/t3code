@@ -40,6 +40,7 @@ it("builds print-mode args with tools, extensions, and sessions off", () => {
     "--no-extensions",
     "--no-session",
     "--no-approve",
+    "--no-context-files",
     "--model",
     "anthropic/claude-haiku-4-5",
     "--thinking",
@@ -49,6 +50,8 @@ it("builds print-mode args with tools, extensions, and sessions off", () => {
     createModelSelection(ProviderInstanceId.make("pi"), PI_DEFAULT_MODEL),
   );
   assert.isFalse(sentinel.includes("--model"));
+  // Generated titles and branch names must not read the user's AGENTS.md.
+  assert.isTrue(sentinel.includes("--no-context-files"));
 });
 
 it.effect("runs pi in print mode and parses structured commit output", () =>
