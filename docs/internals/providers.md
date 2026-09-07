@@ -107,3 +107,54 @@ current client support.
 
 Model classification has its own [manifest constraints](./model-manifest.md). Assistant-reference
 handling is documented under [citations](./assistant-citations.md).
+
+## pi RPC transport
+
+Fork-local driver. After merging upstream, follow
+[pi-provider-maintenance.md](./pi-provider-maintenance.md).
+
+The [driver](../../apps/server/src/provider/Drivers/PiDriver.ts) wraps the user's `pi` binary in
+`--mode rpc`, one process per thread, speaking pi's LF-delimited JSONL through the
+[client](../../apps/server/src/provider/pi/PiRpcClient.ts). The
+[event mapper](../../apps/server/src/provider/pi/PiRuntimeEvents.ts) is pure; the adapter owns
+`turn.started` and `turn.completed` around a `prompt` command and pi's `agent_settled`.
+
+pi has no native permission prompt in RPC mode. T3 materializes a small
+[extension](../../apps/server/src/provider/pi/piExtension.ts) into
+`<stateDir>/providers/pi/extensions/t3-code.ts` and loads it with `-e`. Its `tool_call` handler
+reads `T3_PI_RUNTIME_MODE` and, for tools the mode does not auto-approve, calls `ctx.ui.select`
+with a `{ t3: "t3-approval", toolCallId, toolName, input }` envelope. pi turns that into an
+`extension_ui_request`, which the adapter maps to `request.opened`; the decision returns as
+`extension_ui_response`. `full-access` gates nothing, `auto-accept-edits` gates everything except
+`edit`, `write`, and read-only tools, and `approval-required` and `auto` gate every non-read tool.
+`acceptForSession` is remembered in the extension by tool name plus serialized input. `-e` is
+additive: the user's global extensions, packages, skills, and `models.json` load as in the
+terminal. Project-local `.pi/` resources follow pi's saved trust decision because
+non-interactive modes never prompt.
+
+User questions use the same dialog channel. An extension that wants a T3 question card calls
+`ctx.ui.select` with a `{ t3: "t3-question", question, options }` title and the option labels plus
+`__t3_other__`; the adapter emits `user-input.requested` with `allowCustomAnswer: true`. An
+answer matching a label is returned as the select value. Any other text is held on the session and
+the adapter replies `__t3_other__`; the extension then opens `ctx.ui.input` with a
+`{ t3: "t3-question-custom", question }` title, which the adapter answers from the held text
+without showing a second card. Dismiss, Stop, and session teardown reply `cancelled`. The
+reference caller is the user's `ask_user` extension; pi itself raises no questions.
+
+The same extension bridges T3's MCP server. When `T3_MCP_URL` and `T3_MCP_BEARER_TOKEN` are set
+it runs `initialize` and `tools/list` against the Streamable HTTP endpoint and registers each tool
+as `t3_<name>`, forwarding `tools/call`. Failure to reach the server is logged to stderr and pi
+continues without the preview toolkit.
+
+Model slugs are `provider/id` from pi's `get_available_models`, which lists only models with
+working credentials. `pi-default` is a sentinel meaning "pi's own default" and is never sent to
+`set_model`. Thinking levels are exposed as the `thinkingLevel` option; the adapter applies
+`set_model` and `set_thinking_level` before each prompt, so `sessionModelSwitch` is `in-session`.
+Native conversation rollback is unsupported.
+
+The resume cursor is `{ schemaVersion: 1, sessionFile }` from `get_state`; a restart passes
+`--session <file>` so pi reloads its own history, and the thread stays visible to `pi -r`. The
+health check runs `pi --version` and one ephemeral `--no-session` RPC session for `get_state`,
+`get_available_models`, and `get_commands`; an empty model list reports `unauthenticated`. Text
+generation uses `pi -p --no-tools --no-extensions --no-session --no-approve`. Neither opens a
+persistent session, in keeping with the health-check rule above.

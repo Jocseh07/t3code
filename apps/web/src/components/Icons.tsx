@@ -219,6 +219,24 @@ export const GrokIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+/** Lowercase Greek pi drawn as two strokes and a top bar, in the current text color. */
+export const PiIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.4"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={cn("text-[#0F0F0F] dark:text-[#F5F5F5]", className)}
+  >
+    <path d="M4 7h16" />
+    <path d="M8 7v11" />
+    <path d="M16 7v8.5a2.5 2.5 0 0 0 4 2" />
+  </svg>
+);
+
 export const TraeIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 24 24" fill="currentColor">
     {/* Back rectangle: left strip + bottom strip drawn separately — empty bottom-left corner is the gap between them */}
