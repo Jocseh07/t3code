@@ -25,14 +25,13 @@ export function ProviderIcon(props: ProviderIconProps) {
 
   if (props.provider === "pi") {
     return (
-      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Svg width={size} height={size} viewBox="145 145 510 510" fill="none">
         <Path
-          d="M4 7h16M8 7v11M16 7v8.5a2.5 2.5 0 0 0 4 2"
-          stroke={mono}
-          strokeWidth={2.4}
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          fill={mono}
+          fillRule="evenodd"
+          d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
         />
+        <Path fill={mono} d="M517.36 400H634.72V634.72H517.36Z" />
       </Svg>
     );
   }

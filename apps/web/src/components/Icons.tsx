@@ -219,21 +219,19 @@ export const GrokIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
-/** Lowercase Greek pi drawn as two strokes and a top bar, in the current text color. */
+/** Official pi mark from pi.dev: blocky "P" with a separate square "i" dot. */
 export const PiIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2.4"
-    strokeLinecap="round"
-    strokeLinejoin="round"
+    viewBox="145 145 510 510"
+    fill="currentColor"
     className={cn("text-[#0F0F0F] dark:text-[#F5F5F5]", className)}
   >
-    <path d="M4 7h16" />
-    <path d="M8 7v11" />
-    <path d="M16 7v8.5a2.5 2.5 0 0 0 4 2" />
+    <path
+      fillRule="evenodd"
+      d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
+    />
+    <path d="M517.36 400H634.72V634.72H517.36Z" />
   </svg>
 );
 
