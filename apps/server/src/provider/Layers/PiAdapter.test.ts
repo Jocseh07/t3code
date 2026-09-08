@@ -7,12 +7,14 @@ import * as NodeURL from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
 
 import {
   ApprovalRequestId,
@@ -414,6 +416,153 @@ it.layer(piAdapterTestLayer)("PiAdapterLive", (it) => {
       assert.deepStrictEqual(
         uiResponses.map((request) => request.value),
         ["__t3_other__", "Teal, actually"],
+      );
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("answers select, confirm, and input dialogs from any other extension", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("pi-plain-dialog-thread");
+      const requestLog = NodePath.join(
+        yield* Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pi-log-"))),
+        "requests.jsonl",
+      );
+      const { wrapperPath } = yield* Effect.promise(() =>
+        makeMockPiWrapper({ T3_PI_MOCK_PLAIN_DIALOGS: "1", T3_PI_MOCK_REQUEST_LOG: requestLog }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath, "/tmp/t3-code.ts");
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          runtimeEvents.push(event);
+          if (event.type !== "user-input.requested" || !event.requestId) return;
+          const question = event.payload.questions[0];
+          if (!question) return;
+          const answer =
+            question.header === "Proceed?"
+              ? "Yes"
+              : question.options.length > 0
+                ? "Fast"
+                : "nightly";
+          yield* adapter
+            .respondToUserInput(threadId, ApprovalRequestId.make(event.requestId), {
+              [question.id]: answer,
+            })
+            .pipe(Effect.orDie);
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("pi"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "run the workflow", attachments: [] });
+      yield* Fiber.interrupt(eventsFiber);
+
+      const asked = runtimeEvents.filter((event) => event.type === "user-input.requested");
+      assert.strictEqual(asked.length, 3);
+      const [select, confirm, input] = asked.map((event) =>
+        event.type === "user-input.requested" ? event.payload.questions[0] : undefined,
+      );
+      assert.strictEqual(select?.question, "Pick a lane");
+      assert.deepStrictEqual(
+        select?.options.map((option) => option.value),
+        ["Fast", "Slow"],
+      );
+      assert.isFalse(select?.allowCustomAnswer);
+      assert.strictEqual(confirm?.question, "This runs the workflow.");
+      assert.deepStrictEqual(
+        confirm?.options.map((option) => option.value),
+        ["Yes", "No"],
+      );
+      assert.strictEqual(input?.question, "Name the run");
+      assert.deepStrictEqual(input?.options, []);
+      assert.isTrue(input?.allowCustomAnswer);
+
+      const tool = runtimeEvents.find(
+        (event) =>
+          event.type === "item.completed" && event.payload.itemType === "dynamic_tool_call",
+      );
+      assert.strictEqual(tool?.type, "item.completed");
+      if (tool?.type === "item.completed") {
+        const data = tool.payload.data as { rawOutput?: { content?: string } };
+        assert.strictEqual(data.rawOutput?.content, "lane=Fast confirmed=true name=nightly");
+      }
+      const requests = yield* Effect.promise(() => readJsonLines(requestLog));
+      const uiResponses = requests.filter((request) => request.type === "extension_ui_response");
+      assert.deepStrictEqual(
+        uiResponses.map((request) => ({ value: request.value, confirmed: request.confirmed })),
+        [
+          { value: "Fast", confirmed: undefined },
+          { value: undefined, confirmed: true },
+          { value: "nightly", confirmed: undefined },
+        ],
+      );
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("expires a dialog card when pi resolves the timeout itself", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("pi-dialog-timeout-thread");
+      const requestLog = NodePath.join(
+        yield* Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pi-log-"))),
+        "requests.jsonl",
+      );
+      const { wrapperPath } = yield* Effect.promise(() =>
+        makeMockPiWrapper({
+          T3_PI_MOCK_DIALOG_TIMEOUT: "200",
+          T3_PI_MOCK_REQUEST_LOG: requestLog,
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath, "/tmp/t3-code.ts");
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const asked = yield* Deferred.make<void>();
+      const expired = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          runtimeEvents.push(event);
+          if (event.type === "user-input.requested") {
+            yield* Deferred.succeed(asked, undefined);
+          }
+          if (event.type === "user-input.resolved") {
+            yield* Deferred.succeed(expired, undefined);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("pi"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const sendTurnFiber = yield* adapter
+        .sendTurn({ threadId, input: "run the workflow", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(asked);
+      // pi gives up on its own 200ms after asking; the card follows the same clock.
+      yield* TestClock.adjust(Duration.millis(200));
+      yield* Deferred.await(expired);
+      yield* Fiber.join(sendTurnFiber);
+      yield* Fiber.interrupt(eventsFiber);
+
+      assert.strictEqual(
+        runtimeEvents.filter((event) => event.type === "user-input.requested").length,
+        1,
+      );
+      const resolved = runtimeEvents.find((event) => event.type === "user-input.resolved");
+      assert.strictEqual(resolved?.type, "user-input.resolved");
+      if (resolved?.type === "user-input.resolved") {
+        assert.deepStrictEqual(resolved.payload.answers, {});
+      }
+      const requests = yield* Effect.promise(() => readJsonLines(requestLog));
+      assert.isFalse(
+        requests.some((request) => request.type === "extension_ui_response"),
+        "pi already gave up on the dialog; a late reply would carry a stale id",
       );
       yield* adapter.stopSession(threadId);
     }),

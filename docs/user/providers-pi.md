@@ -47,9 +47,12 @@ Denying a request tells pi the action was declined and lets it continue.
 
 ## Questions from the agent
 
-When a pi extension asks you a multiple-choice question, it appears as a question card in the
-thread. Pick an option or type your own answer. Dismissing the card tells the agent you declined.
-The extension has to support this; the `ask_user` extension does.
+When a pi extension asks you something, it appears as a card in the thread on every connected
+client, phone included. Choices and confirmations show as buttons; free-text prompts show a text
+field. Dismissing the card tells the agent you declined, and a prompt pi puts a time limit on
+disappears when that limit passes.
+
+The `ask_user` extension adds option descriptions and a write-your-own answer on top of this.
 
 ## Thinking
 

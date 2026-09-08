@@ -6,8 +6,10 @@
  * pi started on its own (a background terminal exiting, a subagent finishing),
  * which shows up as a synthetic turn. Approvals arrive as
  * `extension_ui_request` (method `select`) from the T3 extension and are
- * answered with `extension_ui_response`. The pi session file is the resume
- * cursor so a restarted server can `--session <file>` back into history.
+ * answered with `extension_ui_response`. Dialogs any other extension raises go
+ * through the same user-input cards, so extensions in the user's own pi config
+ * stay answerable from every client. The pi session file is the resume cursor
+ * so a restarted server can `--session <file>` back into history.
  *
  * @module provider/Layers/PiAdapter
  */
@@ -34,6 +36,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
@@ -77,6 +80,12 @@ import { buildPiEnvironment, PI_REASONING_OPTION_ID, piLaunchArgv } from "./PiPr
 
 const PROVIDER = ProviderDriverKind.make("pi");
 const PI_RESUME_VERSION = 1 as const;
+/** pi's blocking `ExtensionUIContext` methods. Everything else expects no reply. */
+const PI_DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
+const PI_CONFIRM_YES = "Yes";
+const PI_CONFIRM_NO = "No";
+/** A longer or multi-line prefill belongs in the answer field, not on a button. */
+const PI_PREFILL_OPTION_MAX_LENGTH = 120;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 export interface PiAdapterLiveOptions {
@@ -384,6 +393,111 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
         }).pipe(Effect.forkIn(ctx.scope));
       });
 
+    /**
+     * A dialog from an extension that knows nothing about T3, shown as a plain
+     * question card. `select` and `confirm` answer with one of their own
+     * choices; `input` and `editor` take free text. pi auto-resolves a dialog
+     * carrying `timeout` without telling us, so the card expires with it.
+     */
+    const handleGenericUiRequest = (
+      ctx: PiSessionContext,
+      event: Extract<PiRpcEvent, { type: "extension_ui_request" }>,
+    ) =>
+      Effect.gen(function* () {
+        const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
+        const runtimeRequestId = RuntimeRequestId.make(requestId);
+        const answers = yield* Deferred.make<ProviderUserInputAnswers | undefined>();
+        const isConfirm = event.method === "confirm";
+        const isChoice = isConfirm || event.method === "select";
+        const title = event.title?.trim();
+        const message = event.message?.trim();
+        const placeholder = event.placeholder?.trim();
+        const prefill = event.prefill?.trim();
+        const optionLabels = isConfirm
+          ? [PI_CONFIRM_YES, PI_CONFIRM_NO]
+          : isChoice
+            ? (event.options ?? []).map((option) => option.trim()).filter((option) => option !== "")
+            : prefill && prefill.length <= PI_PREFILL_OPTION_MAX_LENGTH && !prefill.includes("\n")
+              ? [prefill]
+              : [];
+        const questionId = event.id;
+        ctx.pendingUserInputs.set(requestId, { uiRequestId: event.id, optionLabels, answers });
+        yield* offerRuntimeEvent({
+          type: "user-input.requested",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: ctx.threadId,
+          turnId: ctx.activeTurnId,
+          requestId: runtimeRequestId,
+          payload: {
+            questions: [
+              {
+                id: questionId,
+                header: title && message ? title : "pi",
+                question: message || title || placeholder || "pi needs an answer.",
+                options: optionLabels.map((label) => ({
+                  label,
+                  description: label,
+                  value: label,
+                })),
+                // A select that arrives without usable options would strand the
+                // card, and pi's agent loop with it. Take free text instead.
+                allowCustomAnswer: optionLabels.length === 0,
+                multiSelect: false,
+              },
+            ],
+          },
+          raw: { source: "pi.rpc", method: "extension_ui_request", payload: event },
+        });
+
+        const timeoutMs =
+          typeof event.timeout === "number" && Number.isFinite(event.timeout) && event.timeout > 0
+            ? event.timeout
+            : undefined;
+        yield* Effect.gen(function* () {
+          const settled =
+            timeoutMs === undefined
+              ? Option.some(yield* Deferred.await(answers))
+              : yield* Deferred.await(answers).pipe(Effect.timeoutOption(timeoutMs));
+          ctx.pendingUserInputs.delete(requestId);
+          const resolved = Option.getOrUndefined(settled);
+          const rawAnswer = resolved?.[questionId];
+          const answer =
+            typeof rawAnswer === "string"
+              ? rawAnswer.trim()
+              : Array.isArray(rawAnswer) && typeof rawAnswer[0] === "string"
+                ? rawAnswer[0].trim()
+                : "";
+          // An expired dialog already resolved inside pi; a reply now is a stray id.
+          if (Option.isSome(settled)) {
+            yield* ctx.client
+              .notify(
+                answer.length === 0
+                  ? { type: "extension_ui_response", id: event.id, cancelled: true }
+                  : isConfirm
+                    ? {
+                        type: "extension_ui_response",
+                        id: event.id,
+                        confirmed: answer === PI_CONFIRM_YES,
+                      }
+                    : { type: "extension_ui_response", id: event.id, value: answer },
+              )
+              .pipe(Effect.ignore);
+          }
+          yield* offerRuntimeEvent({
+            type: "user-input.resolved",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            requestId: runtimeRequestId,
+            payload: { answers: resolved ?? {} },
+          });
+        }).pipe(Effect.forkIn(ctx.scope));
+      });
+
     const handleExtensionUiRequest = (
       ctx: PiSessionContext,
       event: Extract<PiRpcEvent, { type: "extension_ui_request" }>,
@@ -407,19 +521,10 @@ export function makePiAdapter(piSettings: PiSettings, options: PiAdapterLiveOpti
         }
         const envelope = parseT3PiApprovalEnvelope(event.title);
         if (event.method !== "select" || !envelope) {
-          // Another extension's dialog. Cancel it so pi does not hang waiting on us.
-          if (
-            event.method === "select" ||
-            event.method === "confirm" ||
-            event.method === "input" ||
-            event.method === "editor"
-          ) {
-            yield* ctx.client.notify({
-              type: "extension_ui_response",
-              id: event.id,
-              cancelled: true,
-            });
+          if (PI_DIALOG_METHODS.has(event.method)) {
+            return yield* handleGenericUiRequest(ctx, event);
           }
+          // Fire-and-forget (notify, setStatus, setWidget): pi expects no reply.
           return;
         }
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4);

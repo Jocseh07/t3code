@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - plain Node stand-in for the pi CLI, no Effect runtime.
 /**
  * Minimal stand-in for `pi --mode rpc`, used by the pi adapter and provider
  * tests. It speaks the same LF-delimited JSONL protocol and replays a small
@@ -12,6 +12,10 @@
  *                                 one `mock.env` line with the T3 MCP env pi was given
  *   T3_PI_MOCK_HANG_PROMPT=1      never settle a prompt (for abort tests)
  *   T3_PI_MOCK_ASK_QUESTION=1     replace the bash tool with an ask_user-style question
+ *   T3_PI_MOCK_PLAIN_DIALOGS=1    replace the bash tool with select, confirm, and input
+ *                                 dialogs from an extension that knows nothing about T3
+ *   T3_PI_MOCK_DIALOG_TIMEOUT=<ms> replace the bash tool with one select carrying a timeout,
+ *                                 auto-resolved here when the host does not answer in time
  *   T3_PI_MOCK_SETTLE_ON_STEER=1  hold the first prompt open until a second `prompt`
  *                                 arrives, then settle the run once (for steer tests)
  *   T3_PI_MOCK_REJECT_PROMPT=1    reject every `prompt` command (for turn-failure tests)
@@ -29,6 +33,8 @@ const requestLog = process.env.T3_PI_MOCK_REQUEST_LOG;
 const noModels = process.env.T3_PI_MOCK_NO_MODELS === "1";
 const hangPrompt = process.env.T3_PI_MOCK_HANG_PROMPT === "1";
 const askQuestion = process.env.T3_PI_MOCK_ASK_QUESTION === "1";
+const plainDialogs = process.env.T3_PI_MOCK_PLAIN_DIALOGS === "1";
+const dialogTimeout = Number(process.env.T3_PI_MOCK_DIALOG_TIMEOUT ?? "");
 const settleOnSteer = process.env.T3_PI_MOCK_SETTLE_ON_STEER === "1";
 const selfRun = process.env.T3_PI_MOCK_SELF_RUN === "1";
 const rejectPrompt = process.env.T3_PI_MOCK_REJECT_PROMPT === "1";
@@ -115,15 +121,82 @@ function runRpc() {
       success: true,
       ...(data !== undefined ? { data } : {}),
     });
-  let pendingUi: { id: string; resolve: (value: string | undefined) => void } | undefined;
+  let pendingUi:
+    | { id: string; resolve: (response: Record<string, unknown> | undefined) => void }
+    | undefined;
   let pendingSteer: (() => void) | undefined;
   let uiCounter = 0;
-  const askUi = (request: Record<string, unknown>) =>
-    new Promise<string | undefined>((resolve) => {
+  const askUiRaw = (request: Record<string, unknown>) =>
+    new Promise<Record<string, unknown> | undefined>((resolve) => {
       const id = `ui-${++uiCounter}`;
-      pendingUi = { id, resolve };
+      const settle = (response: Record<string, unknown> | undefined) => {
+        if (pendingUi?.id !== id) return;
+        pendingUi = undefined;
+        resolve(response);
+      };
+      pendingUi = { id, resolve: settle };
       send({ type: "extension_ui_request", id, ...request });
+      // Like pi: a dialog with a timeout resolves itself when nobody answers.
+      const timeout = request.timeout;
+      if (typeof timeout === "number" && timeout > 0) {
+        setTimeout(() => settle(undefined), timeout).unref?.();
+      }
     });
+  const askUi = async (request: Record<string, unknown>) => {
+    const response = await askUiRaw(request);
+    return response?.cancelled === true ? undefined : (response?.value as string | undefined);
+  };
+
+  /** Dialogs raised without T3's JSON envelope, the way any other extension raises them. */
+  const runPlainDialogs = async () => {
+    const toolCallId = "call_plain_1";
+    send({ type: "tool_execution_start", toolCallId, toolName: "workflow", args: {} });
+    const lane = await askUi({ method: "select", title: "Pick a lane", options: ["Fast", "Slow"] });
+    const confirm = await askUiRaw({
+      method: "confirm",
+      title: "Proceed?",
+      message: "This runs the workflow.",
+    });
+    const name = await askUi({
+      method: "input",
+      title: "Name the run",
+      placeholder: "run name",
+    });
+    send({
+      type: "tool_execution_end",
+      toolCallId,
+      toolName: "workflow",
+      result: {
+        content: [
+          {
+            type: "text",
+            text: `lane=${lane ?? "none"} confirmed=${String(confirm?.confirmed)} name=${name ?? "none"}`,
+          },
+        ],
+        details: {},
+      },
+      isError: false,
+    });
+  };
+
+  /** One dialog pi gives up on by itself, leaving the host's card orphaned. */
+  const runTimedOutDialog = async () => {
+    const toolCallId = "call_timeout_1";
+    send({ type: "tool_execution_start", toolCallId, toolName: "workflow", args: {} });
+    const lane = await askUi({
+      method: "select",
+      title: "Pick a lane",
+      options: ["Fast", "Slow"],
+      timeout: dialogTimeout,
+    });
+    send({
+      type: "tool_execution_end",
+      toolCallId,
+      toolName: "workflow",
+      result: { content: [{ type: "text", text: `lane=${lane ?? "none"}` }], details: {} },
+      isError: false,
+    });
+  };
 
   const runQuestion = async () => {
     const toolCallId = "call_ask_1";
@@ -242,6 +315,15 @@ function runRpc() {
       await new Promise<void>((resolve) => {
         pendingSteer = resolve;
       });
+      send({ type: "turn_end", message: {}, toolResults: [] });
+      send({ type: "agent_end", messages: [], willRetry: false });
+      send({ type: "agent_settled" });
+      streaming = false;
+      return;
+    }
+
+    if (plainDialogs || dialogTimeout > 0) {
+      await (plainDialogs ? runPlainDialogs() : runTimedOutDialog());
       send({ type: "turn_end", message: {}, toolResults: [] });
       send({ type: "agent_end", messages: [], willRetry: false });
       send({ type: "agent_settled" });
@@ -424,9 +506,7 @@ function runRpc() {
           break;
         case "extension_ui_response":
           if (pendingUi && pendingUi.id === command.id) {
-            const resolve = pendingUi.resolve;
-            pendingUi = undefined;
-            resolve(command.cancelled === true ? undefined : (command.value as string | undefined));
+            pendingUi.resolve(command);
           }
           break;
         default:

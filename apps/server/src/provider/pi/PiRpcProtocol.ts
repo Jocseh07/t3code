@@ -211,6 +211,8 @@ export type PiRpcEvent =
       readonly title?: string;
       readonly message?: string;
       readonly options?: ReadonlyArray<string>;
+      readonly placeholder?: string;
+      readonly prefill?: string;
       readonly timeout?: number;
       readonly notifyType?: string;
       readonly statusText?: string;
